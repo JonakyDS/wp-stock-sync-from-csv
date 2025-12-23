@@ -264,6 +264,7 @@ class WSSFC_Logger {
     public function get_sync_runs( $per_page = 10, $offset = 0 ) {
         global $wpdb;
 
+        // Use a simpler query that doesn't rely on JSON functions (for MySQL < 5.7 compatibility)
         $query = "
             SELECT 
                 run_id,
@@ -274,9 +275,7 @@ class WSSFC_Logger {
                 SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
                 SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count,
                 MAX(CASE WHEN level = 'success' AND message LIKE '%completed%' THEN context ELSE NULL END) as final_stats,
-                MAX(CASE WHEN level = 'info' AND message LIKE '%Starting%' THEN 
-                    JSON_UNQUOTE(JSON_EXTRACT(context, '$.trigger'))
-                ELSE NULL END) as trigger_type,
+                MAX(CASE WHEN level = 'info' AND message LIKE '%Starting%' THEN context ELSE NULL END) as start_context,
                 CASE 
                     WHEN SUM(CASE WHEN level = 'error' AND message LIKE '%failed%' THEN 1 ELSE 0 END) > 0 THEN 'failed'
                     WHEN SUM(CASE WHEN level = 'success' AND message LIKE '%completed%' THEN 1 ELSE 0 END) > 0 THEN 'success'
@@ -284,6 +283,7 @@ class WSSFC_Logger {
                     ELSE 'in-progress'
                 END as status
             FROM {$this->table_name}
+            WHERE run_id != ''
             GROUP BY run_id
             ORDER BY started_at DESC
             LIMIT %d OFFSET %d
@@ -291,13 +291,28 @@ class WSSFC_Logger {
 
         $results = $wpdb->get_results( $wpdb->prepare( $query, $per_page, $offset ) );
 
-        // Decode final_stats JSON for each result
+        // Check for database errors
+        if ( $wpdb->last_error ) {
+            error_log( '[WP Stock Sync From CSV] Database error in get_sync_runs: ' . $wpdb->last_error );
+            return array();
+        }
+
+        // Decode JSON and extract trigger type in PHP (more compatible)
         foreach ( $results as &$run ) {
+            // Decode final_stats JSON
             if ( ! empty( $run->final_stats ) ) {
                 $run->final_stats = json_decode( $run->final_stats, true );
             }
-            // Map trigger_type to trigger for compatibility
-            $run->trigger = $run->trigger_type ?: 'unknown';
+            
+            // Extract trigger type from start_context JSON in PHP
+            $run->trigger = 'unknown';
+            if ( ! empty( $run->start_context ) ) {
+                $start_context = json_decode( $run->start_context, true );
+                if ( isset( $start_context['trigger'] ) ) {
+                    $run->trigger = $start_context['trigger'];
+                }
+            }
+            unset( $run->start_context );
         }
 
         return $results;
@@ -312,7 +327,7 @@ class WSSFC_Logger {
         global $wpdb;
 
         return (int) $wpdb->get_var(
-            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name}"
+            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id != ''"
         );
     }
 
