@@ -302,6 +302,9 @@ class WSSFC_Stock_Syncer {
         // Split into lines
         $lines = explode( "\n", $content );
 
+        // Auto-detect delimiter from the first non-empty line
+        $delimiter = $this->detect_delimiter( $lines );
+
         foreach ( $lines as $line ) {
             $line = trim( $line );
             
@@ -309,8 +312,8 @@ class WSSFC_Stock_Syncer {
                 continue;
             }
 
-            // Parse CSV line
-            $row = str_getcsv( $line );
+            // Parse CSV line with detected delimiter
+            $row = str_getcsv( $line, $delimiter );
             
             if ( ! empty( $row ) ) {
                 $data[] = $row;
@@ -318,6 +321,50 @@ class WSSFC_Stock_Syncer {
         }
 
         return $data;
+    }
+
+    /**
+     * Detect CSV delimiter from the first line
+     *
+     * @param array $lines Array of CSV lines.
+     * @return string Detected delimiter.
+     */
+    private function detect_delimiter( $lines ) {
+        // Common delimiters to check
+        $delimiters = array( ',', ';', "\t", '|' );
+        
+        // Find first non-empty line (header)
+        $first_line = '';
+        foreach ( $lines as $line ) {
+            $line = trim( $line );
+            if ( ! empty( $line ) ) {
+                $first_line = $line;
+                break;
+            }
+        }
+
+        if ( empty( $first_line ) ) {
+            return ','; // Default to comma
+        }
+
+        // Count occurrences of each delimiter
+        $counts = array();
+        foreach ( $delimiters as $delimiter ) {
+            $counts[ $delimiter ] = substr_count( $first_line, $delimiter );
+        }
+
+        // Find delimiter with highest count (most likely the correct one)
+        $max_count = 0;
+        $detected_delimiter = ',';
+        
+        foreach ( $counts as $delimiter => $count ) {
+            if ( $count > $max_count ) {
+                $max_count = $count;
+                $detected_delimiter = $delimiter;
+            }
+        }
+
+        return $detected_delimiter;
     }
 
     /**
