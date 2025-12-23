@@ -246,6 +246,13 @@ class WSSFC_Logger {
     public function get_logs_for_run( $run_id ) {
         global $wpdb;
 
+        // Handle orphan logs
+        if ( $run_id === '__orphan__' ) {
+            return $wpdb->get_results(
+                "SELECT * FROM {$this->table_name} WHERE run_id IS NULL OR run_id = '' ORDER BY timestamp ASC"
+            );
+        }
+
         return $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT * FROM {$this->table_name} WHERE run_id = %s ORDER BY timestamp ASC",
@@ -264,7 +271,7 @@ class WSSFC_Logger {
     public function get_sync_runs( $per_page = 10, $offset = 0 ) {
         global $wpdb;
 
-        // Use a simpler query that doesn't rely on JSON functions (for MySQL < 5.7 compatibility)
+        // First get runs with proper run_id
         $query = "
             SELECT 
                 run_id,
@@ -279,11 +286,10 @@ class WSSFC_Logger {
                 CASE 
                     WHEN SUM(CASE WHEN level = 'error' AND message LIKE '%failed%' THEN 1 ELSE 0 END) > 0 THEN 'failed'
                     WHEN SUM(CASE WHEN level = 'success' AND message LIKE '%completed%' THEN 1 ELSE 0 END) > 0 THEN 'success'
-                    WHEN run_id = '' THEN 'orphan'
                     ELSE 'in-progress'
                 END as status
             FROM {$this->table_name}
-            WHERE run_id != ''
+            WHERE run_id IS NOT NULL AND run_id != ''
             GROUP BY run_id
             ORDER BY started_at DESC
             LIMIT %d OFFSET %d
@@ -294,11 +300,45 @@ class WSSFC_Logger {
         // Check for database errors
         if ( $wpdb->last_error ) {
             error_log( '[WP Stock Sync From CSV] Database error in get_sync_runs: ' . $wpdb->last_error );
-            return array();
+        }
+
+        // If no runs found but there are logs, show orphan logs as a single run
+        if ( empty( $results ) && $offset === 0 ) {
+            $orphan_count = (int) $wpdb->get_var(
+                "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = ''"
+            );
+            
+            if ( $orphan_count > 0 ) {
+                $orphan_query = "
+                    SELECT 
+                        '__orphan__' as run_id,
+                        MIN(timestamp) as started_at,
+                        MAX(timestamp) as ended_at,
+                        0 as duration,
+                        COUNT(*) as log_count,
+                        SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
+                        SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count,
+                        NULL as final_stats,
+                        NULL as start_context,
+                        'orphan' as status
+                    FROM {$this->table_name}
+                    WHERE run_id IS NULL OR run_id = ''
+                ";
+                
+                $orphan_result = $wpdb->get_row( $orphan_query );
+                if ( $orphan_result ) {
+                    $orphan_result->trigger = 'system';
+                    $results = array( $orphan_result );
+                }
+            }
         }
 
         // Decode JSON and extract trigger type in PHP (more compatible)
         foreach ( $results as &$run ) {
+            if ( $run->run_id === '__orphan__' ) {
+                continue; // Already handled
+            }
+            
             // Decode final_stats JSON
             if ( ! empty( $run->final_stats ) ) {
                 $run->final_stats = json_decode( $run->final_stats, true );
@@ -326,9 +366,20 @@ class WSSFC_Logger {
     public function get_sync_runs_count() {
         global $wpdb;
 
-        return (int) $wpdb->get_var(
-            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id != ''"
+        $count = (int) $wpdb->get_var(
+            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id IS NOT NULL AND run_id != ''"
         );
+        
+        // Check if there are orphan logs
+        $orphan_count = (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = ''"
+        );
+        
+        if ( $orphan_count > 0 ) {
+            $count++; // Add 1 for the orphan "run"
+        }
+        
+        return $count;
     }
 
     /**
