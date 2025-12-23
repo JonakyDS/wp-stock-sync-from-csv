@@ -249,7 +249,7 @@ class WSSFC_Logger {
         // Handle orphan logs
         if ( $run_id === '__orphan__' ) {
             return $wpdb->get_results(
-                "SELECT * FROM {$this->table_name} WHERE run_id IS NULL OR run_id = '' ORDER BY timestamp ASC"
+                "SELECT * FROM {$this->table_name} WHERE run_id IS NULL OR run_id = '' OR TRIM(run_id) = '' ORDER BY timestamp ASC"
             );
         }
 
@@ -271,88 +271,132 @@ class WSSFC_Logger {
     public function get_sync_runs( $per_page = 10, $offset = 0 ) {
         global $wpdb;
 
-        // First get runs with proper run_id
-        $query = "
-            SELECT 
-                run_id,
-                MIN(timestamp) as started_at,
-                MAX(timestamp) as ended_at,
-                TIMESTAMPDIFF(SECOND, MIN(timestamp), MAX(timestamp)) as duration,
-                COUNT(*) as log_count,
-                SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
-                SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count,
-                MAX(CASE WHEN level = 'success' AND message LIKE '%completed%' THEN context ELSE NULL END) as final_stats,
-                MAX(CASE WHEN level = 'info' AND message LIKE '%Starting%' THEN context ELSE NULL END) as start_context,
-                CASE 
-                    WHEN SUM(CASE WHEN level = 'error' AND message LIKE '%failed%' THEN 1 ELSE 0 END) > 0 THEN 'failed'
-                    WHEN SUM(CASE WHEN level = 'success' AND message LIKE '%completed%' THEN 1 ELSE 0 END) > 0 THEN 'success'
-                    ELSE 'in-progress'
-                END as status
-            FROM {$this->table_name}
-            WHERE run_id IS NOT NULL AND run_id != ''
-            GROUP BY run_id
-            ORDER BY started_at DESC
-            LIMIT %d OFFSET %d
-        ";
+        // First, get distinct run_ids
+        $run_ids = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT DISTINCT run_id FROM {$this->table_name} 
+                 WHERE run_id IS NOT NULL AND run_id != '' AND TRIM(run_id) != ''
+                 ORDER BY run_id DESC
+                 LIMIT %d OFFSET %d",
+                $per_page,
+                $offset
+            )
+        );
 
-        $results = $wpdb->get_results( $wpdb->prepare( $query, $per_page, $offset ) );
+        $results = array();
 
-        // Check for database errors
-        if ( $wpdb->last_error ) {
-            error_log( '[WP Stock Sync From CSV] Database error in get_sync_runs: ' . $wpdb->last_error );
+        // Build run data for each run_id
+        foreach ( $run_ids as $run_id ) {
+            $run_data = $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT 
+                        %s as run_id,
+                        MIN(timestamp) as started_at,
+                        MAX(timestamp) as ended_at,
+                        TIMESTAMPDIFF(SECOND, MIN(timestamp), MAX(timestamp)) as duration,
+                        COUNT(*) as log_count,
+                        SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
+                        SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count
+                    FROM {$this->table_name}
+                    WHERE run_id = %s",
+                    $run_id,
+                    $run_id
+                )
+            );
+
+            if ( $run_data ) {
+                // Get final stats from success message
+                $final_stats = $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT context FROM {$this->table_name} 
+                         WHERE run_id = %s AND level = 'success' AND message LIKE '%s'
+                         LIMIT 1",
+                        $run_id,
+                        '%completed%'
+                    )
+                );
+                $run_data->final_stats = $final_stats ? json_decode( $final_stats, true ) : null;
+
+                // Get trigger from start message
+                $start_context = $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT context FROM {$this->table_name} 
+                         WHERE run_id = %s AND level = 'info' AND message LIKE '%s'
+                         LIMIT 1",
+                        $run_id,
+                        '%Starting%'
+                    )
+                );
+                $run_data->trigger = 'unknown';
+                if ( $start_context ) {
+                    $context = json_decode( $start_context, true );
+                    if ( isset( $context['trigger'] ) ) {
+                        $run_data->trigger = $context['trigger'];
+                    }
+                }
+
+                // Determine status
+                $has_failed = $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$this->table_name} 
+                         WHERE run_id = %s AND level = 'error' AND message LIKE '%s'",
+                        $run_id,
+                        '%failed%'
+                    )
+                );
+                $has_success = $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$this->table_name} 
+                         WHERE run_id = %s AND level = 'success' AND message LIKE '%s'",
+                        $run_id,
+                        '%completed%'
+                    )
+                );
+
+                if ( $has_failed > 0 ) {
+                    $run_data->status = 'failed';
+                } elseif ( $has_success > 0 ) {
+                    $run_data->status = 'success';
+                } else {
+                    $run_data->status = 'in-progress';
+                }
+
+                $results[] = $run_data;
+            }
         }
+
+        // Sort by started_at descending
+        usort( $results, function( $a, $b ) {
+            return strtotime( $b->started_at ) - strtotime( $a->started_at );
+        });
 
         // If no runs found but there are logs, show orphan logs as a single run
         if ( empty( $results ) && $offset === 0 ) {
             $orphan_count = (int) $wpdb->get_var(
-                "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = ''"
+                "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = '' OR TRIM(run_id) = ''"
             );
             
             if ( $orphan_count > 0 ) {
-                $orphan_query = "
-                    SELECT 
+                $orphan_data = $wpdb->get_row(
+                    "SELECT 
                         '__orphan__' as run_id,
                         MIN(timestamp) as started_at,
                         MAX(timestamp) as ended_at,
                         0 as duration,
                         COUNT(*) as log_count,
                         SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
-                        SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count,
-                        NULL as final_stats,
-                        NULL as start_context,
-                        'orphan' as status
+                        SUM(CASE WHEN level = 'warning' THEN 1 ELSE 0 END) as warning_count
                     FROM {$this->table_name}
-                    WHERE run_id IS NULL OR run_id = ''
-                ";
+                    WHERE run_id IS NULL OR run_id = '' OR TRIM(run_id) = ''"
+                );
                 
-                $orphan_result = $wpdb->get_row( $orphan_query );
-                if ( $orphan_result ) {
-                    $orphan_result->trigger = 'system';
-                    $results = array( $orphan_result );
+                if ( $orphan_data ) {
+                    $orphan_data->final_stats = null;
+                    $orphan_data->trigger = 'system';
+                    $orphan_data->status = 'orphan';
+                    $results = array( $orphan_data );
                 }
             }
-        }
-
-        // Decode JSON and extract trigger type in PHP (more compatible)
-        foreach ( $results as &$run ) {
-            if ( $run->run_id === '__orphan__' ) {
-                continue; // Already handled
-            }
-            
-            // Decode final_stats JSON
-            if ( ! empty( $run->final_stats ) ) {
-                $run->final_stats = json_decode( $run->final_stats, true );
-            }
-            
-            // Extract trigger type from start_context JSON in PHP
-            $run->trigger = 'unknown';
-            if ( ! empty( $run->start_context ) ) {
-                $start_context = json_decode( $run->start_context, true );
-                if ( isset( $start_context['trigger'] ) ) {
-                    $run->trigger = $start_context['trigger'];
-                }
-            }
-            unset( $run->start_context );
         }
 
         return $results;
@@ -367,12 +411,12 @@ class WSSFC_Logger {
         global $wpdb;
 
         $count = (int) $wpdb->get_var(
-            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id IS NOT NULL AND run_id != ''"
+            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id IS NOT NULL AND run_id != '' AND TRIM(run_id) != ''"
         );
         
         // Check if there are orphan logs
         $orphan_count = (int) $wpdb->get_var(
-            "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = ''"
+            "SELECT COUNT(*) FROM {$this->table_name} WHERE run_id IS NULL OR run_id = '' OR TRIM(run_id) = ''"
         );
         
         if ( $orphan_count > 0 ) {
@@ -399,7 +443,7 @@ class WSSFC_Logger {
 
         // Get unique run count
         $counts['runs'] = (int) $wpdb->get_var(
-            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id != ''"
+            "SELECT COUNT(DISTINCT run_id) FROM {$this->table_name} WHERE run_id IS NOT NULL AND run_id != '' AND TRIM(run_id) != ''"
         );
 
         // Get counts by level
