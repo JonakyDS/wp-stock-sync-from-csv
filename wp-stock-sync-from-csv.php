@@ -112,6 +112,7 @@ final class WP_Stock_Sync_From_CSV {
         require_once WSSFC_PLUGIN_DIR . 'includes/class-wssfc-logger.php';
         require_once WSSFC_PLUGIN_DIR . 'includes/class-wssfc-stock-syncer.php';
         require_once WSSFC_PLUGIN_DIR . 'includes/class-wssfc-cron.php';
+        require_once WSSFC_PLUGIN_DIR . 'includes/class-wssfc-github-updater.php';
 
         // Admin classes
         if ( is_admin() ) {
@@ -141,6 +142,9 @@ final class WP_Stock_Sync_From_CSV {
      * Initialize plugin components
      */
     public function init_components() {
+        // Initialize GitHub updater (works even without WooCommerce)
+        new WSSFC_GitHub_Updater();
+
         if ( ! class_exists( 'WooCommerce' ) ) {
             return;
         }
