@@ -1,0 +1,124 @@
+name: Release Plugin
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'wp-stock-sync-from-csv.php'
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      version_changed: ${{ steps.check_tag.outputs.version_changed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get plugin version
+        id: get_version
+        run: |
+          VERSION=$(grep -oP "Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+" wp-stock-sync-from-csv.php)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.get_version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag v${{ steps.get_version.outputs.version }} already exists"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v${{ steps.get_version.outputs.version }} does not exist"
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+  release:
+    needs: check-version
+    if: needs.check-version.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create plugin zip
+        run: |
+          # Create a clean directory for the plugin
+          mkdir -p build/wp-stock-sync-from-csv
+          
+          # Copy plugin files (excluding development files)
+          rsync -av --exclude='.git' \
+                    --exclude='.github' \
+                    --exclude='.vscode' \
+                    --exclude='.gitignore' \
+                    --exclude='node_modules' \
+                    --exclude='vendor' \
+                    --exclude='composer.json' \
+                    --exclude='composer.lock' \
+                    --exclude='package.json' \
+                    --exclude='package-lock.json' \
+                    --exclude='.DS_Store' \
+                    --exclude='Thumbs.db' \
+                    --exclude='*.log' \
+                    --exclude='tests' \
+                    --exclude='phpunit.xml' \
+                    --exclude='phpcs.xml' \
+                    ./ build/wp-stock-sync-from-csv/
+          
+          # Create zip file
+          cd build
+          zip -r wp-stock-sync-from-csv-${{ needs.check-version.outputs.version }}.zip wp-stock-sync-from-csv
+          mv wp-stock-sync-from-csv-${{ needs.check-version.outputs.version }}.zip ../
+          cd ..
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, including all commits"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges | head -50)
+          else
+            echo "Previous tag: $PREV_TAG"
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          
+          # Save changelog to file for the release body
+          echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+          echo "$CHANGELOG" >> changelog.md
+          echo "" >> changelog.md
+          echo "---" >> changelog.md
+          echo "" >> changelog.md
+          echo "### Installation" >> changelog.md
+          echo "1. Download \`wp-stock-sync-from-csv-${{ needs.check-version.outputs.version }}.zip\`" >> changelog.md
+          echo "2. Go to WordPress Admin → Plugins → Add New → Upload Plugin" >> changelog.md
+          echo "3. Choose the downloaded zip file and click Install Now" >> changelog.md
+          echo "4. Activate the plugin" >> changelog.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: WP Stock Sync From CSV v${{ needs.check-version.outputs.version }}
+          body_path: changelog.md
+          draft: false
+          prerelease: false
+          files: |
+            wp-stock-sync-from-csv-${{ needs.check-version.outputs.version }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          echo "🎉 Released WP Stock Sync From CSV v${{ needs.check-version.outputs.version }}"
+          echo "Download: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.check-version.outputs.version }}"
