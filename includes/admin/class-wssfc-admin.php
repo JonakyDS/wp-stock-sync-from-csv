@@ -159,6 +159,18 @@ class WSSFC_Admin {
             )
         );
 
+        add_settings_field(
+            'ssl_verify',
+            __( 'Verify SSL Certificate', 'wp-stock-sync-from-csv' ),
+            array( $this, 'render_checkbox_field' ),
+            'wp-stock-sync-from-csv',
+            'wssfc_csv_section',
+            array(
+                'field'       => 'ssl_verify',
+                'description' => __( 'Disable this if you get SSL certificate errors (not recommended for production).', 'wp-stock-sync-from-csv' ),
+            )
+        );
+
         // Schedule Settings Section
         add_settings_section(
             'wssfc_schedule_section',
@@ -223,6 +235,7 @@ class WSSFC_Admin {
         $sanitized['csv_url']         = esc_url_raw( $input['csv_url'] ?? '' );
         $sanitized['sku_column']      = sanitize_text_field( $input['sku_column'] ?? 'sku' );
         $sanitized['quantity_column'] = sanitize_text_field( $input['quantity_column'] ?? 'quantity' );
+        $sanitized['ssl_verify']      = ! empty( $input['ssl_verify'] );
         $sanitized['schedule']        = sanitize_key( $input['schedule'] ?? 'hourly' );
         
         // Handle custom interval minutes (1-43200 minutes = 1 min to 30 days)

@@ -41,6 +41,7 @@ class WSSFC_Stock_Syncer {
         $csv_url         = $settings['csv_url'] ?? '';
         $sku_column      = $settings['sku_column'] ?? 'sku';
         $quantity_column = $settings['quantity_column'] ?? 'quantity';
+        $ssl_verify      = $settings['ssl_verify'] ?? true;
 
         if ( empty( $csv_url ) ) {
             $this->logger->error( __( 'CSV URL is not configured.', 'wp-stock-sync-from-csv' ) );
@@ -55,7 +56,7 @@ class WSSFC_Stock_Syncer {
         
         $response = wp_remote_get( $csv_url, array(
             'timeout'   => 60,
-            'sslverify' => apply_filters( 'wssfc_ssl_verify', true ),
+            'sslverify' => apply_filters( 'wssfc_ssl_verify', $ssl_verify ),
         ) );
 
         if ( is_wp_error( $response ) ) {
@@ -330,6 +331,7 @@ class WSSFC_Stock_Syncer {
         $csv_url         = $settings['csv_url'] ?? '';
         $sku_column      = $settings['sku_column'] ?? 'sku';
         $quantity_column = $settings['quantity_column'] ?? 'quantity';
+        $ssl_verify      = $settings['ssl_verify'] ?? true;
 
         if ( empty( $csv_url ) ) {
             return array(
@@ -341,7 +343,7 @@ class WSSFC_Stock_Syncer {
         // Fetch CSV content
         $response = wp_remote_get( $csv_url, array(
             'timeout'   => 30,
-            'sslverify' => apply_filters( 'wssfc_ssl_verify', true ),
+            'sslverify' => apply_filters( 'wssfc_ssl_verify', $ssl_verify ),
         ) );
 
         if ( is_wp_error( $response ) ) {

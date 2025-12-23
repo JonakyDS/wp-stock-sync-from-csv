@@ -3,7 +3,7 @@
  * Plugin Name: WP Stock Sync From CSV
  * Plugin URI: https://github.com/JonakyDS/wp-stock-sync-from-csv
  * Description: Automatically syncs WooCommerce product stock levels from a remote CSV file.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Jonaky Adhikary
  * Author URI: https://jonakyds.com
  * License: GPL v2 or later
@@ -24,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin constants
-define( 'WSSFC_VERSION', '1.0.1' );
+define( 'WSSFC_VERSION', '1.0.2' );
 define( 'WSSFC_PLUGIN_FILE', __FILE__ );
 define( 'WSSFC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WSSFC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -163,6 +163,7 @@ final class WP_Stock_Sync_From_CSV {
             'csv_url'           => '',
             'sku_column'        => 'sku',
             'quantity_column'   => 'quantity',
+            'ssl_verify'        => true,
             'schedule'          => 'hourly',
             'custom_interval_minutes' => 60,
             'enabled'           => false,
