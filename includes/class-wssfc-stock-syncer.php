@@ -153,11 +153,12 @@ class WSSFC_Stock_Syncer {
         ) );
 
         // Process each row
-        $updated_count  = 0;
-        $skipped_count  = 0;
+        $updated_count   = 0;
+        $skipped_count   = 0;
         $not_found_count = 0;
-        $error_count    = 0;
-        $total_rows     = count( $csv_data );
+        $error_count     = 0;
+        $invalid_qty_count = 0;
+        $total_rows      = count( $csv_data );
 
         $this->logger->info( sprintf( __( 'Processing %d rows from CSV...', 'wp-stock-sync-from-csv' ), $total_rows ) );
 
@@ -179,11 +180,7 @@ class WSSFC_Stock_Syncer {
 
             // Validate quantity
             if ( $quantity === '' || ! is_numeric( $quantity ) ) {
-                $this->logger->warning( sprintf(
-                    __( 'Invalid quantity "%s" for SKU "%s". Skipping.', 'wp-stock-sync-from-csv' ),
-                    $quantity,
-                    $sku
-                ) );
+                $invalid_qty_count++;
                 $skipped_count++;
                 continue;
             }
@@ -194,10 +191,6 @@ class WSSFC_Stock_Syncer {
             $product_id = wc_get_product_id_by_sku( $sku );
 
             if ( ! $product_id ) {
-                $this->logger->warning( sprintf(
-                    __( 'Product not found for SKU: %s', 'wp-stock-sync-from-csv' ),
-                    $sku
-                ) );
                 $not_found_count++;
                 continue;
             }
@@ -206,11 +199,6 @@ class WSSFC_Stock_Syncer {
             $product = wc_get_product( $product_id );
 
             if ( ! $product ) {
-                $this->logger->warning( sprintf(
-                    __( 'Could not load product for ID: %d (SKU: %s)', 'wp-stock-sync-from-csv' ),
-                    $product_id,
-                    $sku
-                ) );
                 $error_count++;
                 continue;
             }
@@ -256,11 +244,12 @@ class WSSFC_Stock_Syncer {
 
         // Summary
         $stats = array(
-            'total_rows'      => $total_rows,
-            'updated_count'   => $updated_count,
-            'skipped_count'   => $skipped_count,
-            'not_found_count' => $not_found_count,
-            'error_count'     => $error_count,
+            'total_rows'       => $total_rows,
+            'updated_count'    => $updated_count,
+            'skipped_count'    => $skipped_count,
+            'not_found_count'  => $not_found_count,
+            'invalid_qty_count'=> $invalid_qty_count,
+            'error_count'      => $error_count,
         );
 
         $this->logger->info( sprintf(
